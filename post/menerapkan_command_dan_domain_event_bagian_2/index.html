@@ -1,0 +1,478 @@
+    <!DOCTYPE html>
+<html lang="en-us">
+	<head>
+		<meta charset="utf-8">
+		<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<meta name="author" content="A. Akbar Hidayat">
+		<meta name="description" content="Urip Iku Urup">
+		<meta name="generator" content="Hugo 0.16-DEV" />
+		<title>Menerapkan Command dan Domain Event bagian 2 &middot; Urip iku urup</title>
+		<link rel="shortcut icon" href="https://keripix.github.ioimages/favicon.ico">
+		<link rel="stylesheet" href="https://keripix.github.iocss/style.css">
+		<link rel="stylesheet" href="https://keripix.github.iocss/highlight.css">
+		<link rel="stylesheet" href="https://keripix.github.iocss/monosocialiconsfont.css">
+		
+		<link href="https://keripix.github.io/index.xml" rel="alternate" type="application/rss+xml" title="Urip iku urup" />
+		
+	</head>
+
+    <body>
+       <nav class="main-nav">
+	
+	
+		<a href='https://keripix.github.io'> <span class="arrow">←</span>Home</a>
+	
+
+	
+		<a href='https://keripix.github.ioabout'>About</a>
+	
+
+	
+	<a class="cta" href="https://keripix.github.io/index.xml">Subscribe</a>
+	
+</nav>
+
+        <section id="wrapper">
+            <article class="post">
+                <header>
+                    <h1>Menerapkan Command dan Domain Event bagian 2</h1>
+                    <h2 class="headline">January 27, 2016</h2>
+                </header>
+                <section id="post-body">
+                    
+
+<p><img src="https://cdn-images-1.medium.com/max/2000/1*LIYtUrLIm1oBr1537VgYPA.jpeg" alt="" /></p>
+
+<p>Pada pembahasan sebelumnya, kami membahas bagaimana Command diterapkan di codebase Dicoding. Pada artikel ini, kami akan mencoba untuk membahas penerapan Domain Events.</p>
+
+<p>Namun sebelumnya, berikut adalah diagram yang menjelaskan secara sederhana hubungan antara Command, Command Bus dan Command Handler.</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/800/1*ftFc9UoA-dOPtQaEGLudzw.png" alt="" /></p>
+
+<h2 id="domain-event:13d45b05e59a4a38b10f7f13a4d775d7">Domain Event</h2>
+
+<p>Ketika logika bisnis sudah dijalankan oleh sistem, maka sebuah domain event dapat dibangkitkan. Domain Event berhubungan dengan kejadian penting dalam pelaksanaan sebuah use case.</p>
+
+<p>Melanjutkan contoh <code>CreateUnpublishedChallenge</code> dari artikel sebelumnya, maka ketika Unpublished Challenge ini sudah terbuat, aplikasi dapat membangkitkan event <code>UnpublishedChallengeWasCreated</code>. Ketika sebuah domain event dibangkitkan, kita dapat menjalankan tugas-tugas tambahan yang berhubungan dengan event tadi.</p>
+
+<p>Mari kita buat contoh sederhana untuk menggambarkan konsep di atas. Misalnya, kita memiliki use case berikut untuk proses memvalidasi sebuah Unpublished Challenge:</p>
+
+<ol>
+<li>Admin meminta Unpublished Challenge untuk dipublikasikan.</li>
+<li>Sistem memeriksa apakah Challenge sudah dibayar.</li>
+<li>Sistem mengubah status Challenge menjadi Published.</li>
+<li>Sistem mengabari Pemilik Challenge bahwa Challengenya sudah published.</li>
+<li>Sistem menambahkan Challenge ke News Feeds.</li>
+<li>Sistem mengirim tweets ke Twitter untuk mempublikasikan adanya Challenge baru.</li>
+<li>Sistem melog kejadian di atas.</li>
+</ol>
+
+<p>Ketika use case di atas diimplementasikan di sebuah Command Handler, kodenya bisa jadi seperti contoh berikut ini:</p>
+
+<pre><code>&lt;?php
+
+class PublishUnpublishedChallengeHandler
+{
+    public function handle(PublishUnpublishedChallenge $command)
+    {
+        try {
+            
+            DB::beginTransaction();
+            
+            $publishedChallenge = $this-&gt;challengePublicationContext-&gt;publishUnpublishedChallenge($command-&gt;challenge_id);
+            
+            $this-&gt;memberMailer-&gt;send($publishedChallenge-&gt;getChallengeOwner(), 'Congrats, your Challenge Has Been Published');
+            
+            $this-&gt;feedRepository-&gt;add($publishedChallenge);
+            
+            $this-&gt;tweetStream-&gt;add('A new challenge has been published');
+            
+            $this-&gt;eventLog-&gt;log($publishedChallenge);
+            
+            DB::commit();
+            
+        } catch (Exception $e) {
+            
+            DB::rollback();
+            
+            throw $e;
+            
+        }
+        
+        return new PublishUnpublishedChallengeResponse($publishedChallenge);
+    }
+}
+</code></pre>
+
+<p>Masalah dari contoh di atas adalah, bila ada salah satu kejadian di atas yang gagal, maka seluruh proses pembuatan Challenge akan menjadi batal. Hal ini karena seluruh tahapan di atas dijalankan di dalam sebuah database transaction.</p>
+
+<p>Masalah kedua adalah, proses publishing di atas akan menunggu aktifitas-aktifitas yang membutuhkan waktu yang tidak sebentar. Misalnya mengirim email ke pemilik Challenge.</p>
+
+<h3 id="bagaimana-domain-event-dapat-membantu:13d45b05e59a4a38b10f7f13a4d775d7">Bagaimana Domain Event Dapat Membantu?</h3>
+
+<p>Yang perlu kita tentukan dari contoh use case di atas, adalah tugas mana yang utama dan tugas mana yang sekunder. Salah satu cara yang biasa saya lakukan adalah dengan menjawab pertanyaan ini:</p>
+
+<blockquote>
+<p>Dapatkah saya mentolerir bila tugas tersebut gagal?</p>
+</blockquote>
+
+<p>Bila tugas <code>publishUnpublishedChallenge</code> gagal, dapatkah saya mentolerirnya? Tentu tidak. Ini adalah tugas utama. Bila dia gagal, seluruh proses harus gagal. Dan Admin yang mengirim request tersebut harus dikabari konteks kegagalannya.</p>
+
+<p>Bagaimana dengan mengirim notifikasi kepada pemilik Challenge bahwa Challenge sudah terpublikasikan? Bila proses tersebut gagal, apakah kita dapat mentoleransinya? Bila saya ditanya pertanyaan ini, maka saya akan menjawab iya. Karena kejadian buruknya, kita dapat mengirim kabar ini secara manual.</p>
+
+<p>Saya tidak berkata bahwa mengirim email ke pemilik Challenge tidak penting. Itu tetap penting. Tetapi seberapa jauh saya dapat mentoler kejadian gagal? Bila saya dapat mentolerirnya, maka ia masuk ke kategori tugas sekunder.</p>
+
+<p>Saya juga akan memasukkan tugas menambahkan challenge ke feed, mengirim tweet ke twitter dan logging sebagai tugas sekunder.</p>
+
+<p>Tentu saja mana yang masuk tugas utama dan tugas sekunder sangat tergantung pada kebutuhan bisnis. Bisa jadi di suatu konteks tertentu, mengirim email menjadi tugas utama. Bukan sekunder.</p>
+
+<p>Setelah menentukan mana yang termasuk tugas utama, dan tugas sekunder, kode kita dapat berubah menjadi seperti contoh berikut ini:</p>
+
+<pre><code>&lt;?php
+
+class PublishUnpublishedChallengeHandler
+{
+    public function handle(PublishUnpublishedChallenge $command)
+    {
+        try {
+            
+            DB::beginTransaction();
+            
+            $publishedChallenge = $this-&gt;challengePublicationContext-&gt;publishUnpublishedChallenge($command-&gt;challenge_id);
+            
+            DB::commit();
+            
+        } catch (Exception $e) {
+            
+            DB::rollback();
+            
+            throw $e;
+            
+        }
+        
+        // Dispatch Domain Event
+        $this-&gt;dispatchEventsFor($publishedChallenge);
+        
+        return new PublishUnpublishedChallengeResponse($publishedChallenge);
+    }
+}
+</code></pre>
+
+<p>Pada baris ke 23 pada contoh di atas, kita dapat melihat perintah <code>dispatchEventsFor</code>. Perintah ini akan mempublikasikan domain event yang telah dibangkitkan oleh <code>$publishedChallenge</code>. Dimanakan event-event ini dibangkitkan?</p>
+
+<p>Dalam contoh di atas, domain event dapat dibangkitkan ketika proses publishUnpublishedChallenge dijalankan.</p>
+
+<pre><code>&lt;?php
+
+class ChallengePublicationContext
+{
+    public function publishUnpublishedChallenge($challengeId)
+    {
+        // Jalankan logika bisnis yang berhubungan dengan 
+        // proses mempublikasikan unpublised challenge
+        
+        // Bila sukses, maka kita tambahkan Challenge ini ke
+        // koleksi Published Challenge
+        $this-&gt;publishedChallengeRepository-&gt;add($challenge);
+        // Karena challenge ini sudah dipublikasikan, maka kita
+        // bangkitkan domain event yang berhubungan dengan kejadian
+        // ini
+        $challenge-&gt;raise(new UnpublishedChallengeWasPublished($challenge-&gt;getId()));
+        return $challenge;
+    
+    }
+}
+</code></pre>
+
+<p>Tentu saja, domain event dapat dibangkitkan dimana saja selama konteks dari pembangkitan itu tepat secara logika bisnis. Misalnya pasca user baru ditambahkan ke repository, kita dapat membangkitkan event <code>NewDeveloperWasRegistered</code>.</p>
+
+<h2 id="event-listener:13d45b05e59a4a38b10f7f13a4d775d7">Event Listener</h2>
+
+<p>Ketika domain event sudah dipublikasikan, maka seluruh Event Listener akan dijalankan. Dalam contoh use case kita di atas (mempublikasikan Unpublished Challenge), kita memiliki beberapa event listener sebagai berikut:</p>
+
+<ol>
+<li>Listener untuk mengirimkan kabar melalui email.</li>
+<li>Listener untuk menambahkan Challenge ke feed.</li>
+<li>Listener untuk melakukan tweeting.</li>
+<li>Listener untuk melakukan logging.</li>
+</ol>
+
+<p>Mari kita buat contoh Event Listener untuk kasus pertama. Contoh dibawah ini menggunakan Laravel 4.2 dan Commander.</p>
+
+<pre><code>&lt;?php
+
+class EventMailerServiceProvider extends ServiceProvider
+{
+    public function register()
+    {
+        // Ketika seluruh event dari Domain Challenge dibangkitkan, maka kita jalankan ChallengeEventMailer
+        // untuk menangani event tersebut.
+        \Event::listen('Dicoding.Domain.Challenge.*', 'Dicoding\Infrastructure\Emailing\Challenge\ChallengeEventMailer');
+    }
+}
+// Contoh wujud dari ChallengeEventMailer
+class ChallengeEventMailer extends EventListener
+{
+    public function whenUnpublishedChallengeWasPublished($job, $data)
+    {
+        // jalankan tugas pengiriman email
+    }
+    
+    public function whenUnpublishedChallengeWasCreated($job, $data)
+    {
+        
+    }
+    
+    // dsb
+}
+</code></pre>
+
+<p>Jadi, ketika <code>ChallengeEventMailer</code> menerima event <code>UnpublishedChallengeWasPublished</code>, class tersebut akan menjalankan fungsi <code>whenUnpublishedChallengeWasPublished</code>. Coba perhatikan bagaimana fungsi tersebut diberi nama sesuai dengan konteks event yang ditanganinya. Memudahkan bukan?</p>
+
+<p>Contoh di atas juga memperlihatkan fungsi tambahan lainnya yang dimiliki oleh <code>ChallengeEventMailer</code>. Kita dapat terus menambahkan fungsi-fungsi untuk menangani domain event yang dibangkitkan oleh object dari namespace Challenge.</p>
+
+<p>Bagaimana dengan Event Listener lainnya? Berikut adalah contoh untuk NewsFeed:</p>
+
+<pre><code>&lt;?php
+class NewsFeedServiceProvider extends ServiceProvider
+{
+    public function register()
+    {
+        // Ketika seluruh event dari Domain Challenge dibangkitkan, maka kita jalankan ChallengeFeedListener
+        // untuk menangani event tersebut.
+        \Event::listen('Dicoding.Domain.Challenge.*', 'Dicoding\Infrastructure\Feeds\Challenges\ChallengeFeedListener');
+    }
+}
+// Contoh wujud dari ChallengeFeedListener
+class ChallengeFeedListener extends EventListener
+{
+    public function whenUnpublishedChallengeWasPublished($job, $data)
+    {
+        try {
+            // tambahkan challenge ke feed
+            $challenge = $this-&gt;challengeRepository-&gt;findById($data);
+            $challengeFeed = new ChallengeFeed($challenge);
+            $this-&gt;feedRepository-&gt;add($challengeFeed);
+            $job-&gt;delete();
+            
+        } catch (\Exception $e) {
+            \Log::error($e);
+            throw $e;
+        }
+        
+    }
+    
+    public function whenUnpublishedChallengeWasCreated($job, $data)
+    {
+        
+    }
+    
+    // dsb
+}
+</code></pre>
+
+<p>Event Listener lainnya akan mengikuti pola Event Listener di atas. Jadi pada dasarnya, kita memiliki Event Listener yang akan mendengarkan Domain Event ketika ia dipublikasikan.</p>
+
+<p>Bila suatu saat kita diberi tugas untuk membuat update status di facebook ketika sebuah unpublished challenge berhasil di publikasikan, kita tinggal membuat Event Listener baru.</p>
+
+<h3 id="menjalankan-event-listener-di-background:13d45b05e59a4a38b10f7f13a4d775d7">Menjalankan Event Listener di Background</h3>
+
+<p>Mengirim email ke pemilik challenge, dan membuat status baru di Twitter, bukanlah proses yang sebentar. Alangkah baiknya bila kita proses-proses yang memakan waktu yang lama ini dijalankan di background. Sehingga ketika proses utama sudah terlaksana, Admin mengetahui hasilnya tanpa harus menunggu tugas-tugas sekunder.</p>
+
+<p>Bagaimana menerapkannya? Kita buat sebuah Abstract Class yang akan menjalankan event di background.</p>
+
+<pre><code>&lt;?php
+abstract class &lt;?php
+abstract class QueuedEventHandler
+{
+    // Akan dijalankan ketika event diterima
+    // Ini adalah mekanisme internal Laravel 4.2
+    public function handle($param)
+    {
+        $this-&gt;handleEvent($param);
+    }
+    
+    public function handleEvent($param)
+    {
+        // Menangkap event
+        $currentEventName = Event::firing();
+        
+        // Memperoleh event name.
+        // 
+        // Metode ini tidak ditampilkan, karena sangat tergantung
+        // dari bagaimana Domain Event disimpan di struktur Aplikasi.
+        $domainEvent = $this-&gt;getDomainEventName($currentEventName);
+        
+        // Mengambil namespace dari Event Listener ini.
+        // Sehingga kita dapat menjalankannya di sistem Queue
+        $currentNamespace = $this-&gt;getClientClassFullNamespace();
+        
+        // Memeriksa apakah Event Listener ini memiliki fungsi untuk
+        // menangani event
+        if (method_exists($this, &quot;when$domainEvent&quot;)) {
+            // logging event handling
+            Log::info(&quot;Event $currentEventName has been captured. And now executing when$domainEvent&quot;);
+            // Menjalankan handler di background
+            // 
+            // Ini juga mekanisme internal Laravel 4.2
+            Queue::push(
+                &quot;$currentNamespace@when$domainEvent&quot;,
+                [
+                    $param
+                ]
+            );
+            
+        } else {
+            // ketika tidak ada event handler untuk event ini,
+            // kita log saja dalam sebuah warning.
+            Log::warning(&quot;Event $currentEventName has been captured. But no when$domainEvent to handle the event&quot;);
+        }
+    }
+}
+</code></pre>
+
+<p>Nah, bila kita ingin menjalankan proses pengiriman email di background, kita tinggal menjadikan <code>ChallengeEventMailer</code> meng-extend <code>QueuedEventHandler</code> di atas.</p>
+
+<pre><code>&lt;?php
+
+// Event handler ini akan berjalan di background
+class ChallengeEventMailer extends QueuedEventHandler
+{
+    public function whenUnpublishedChallengeWasPublished($job, $data)
+    {
+        try {
+            // Kirim email di background
+            $job-&gt;delete();
+            
+        } catch (\Exception $e) {
+            \Log::error($e);
+            throw $e;
+        }
+        
+    }
+    
+    public function whenUnpublishedChallengeWasCreated($job, $data)
+    {
+        
+    }
+    
+    // dsb
+}
+</code></pre>
+
+<h3 id="bagaimana-dengan-testing:13d45b05e59a4a38b10f7f13a4d775d7">Bagaimana Dengan Testing?</h3>
+
+<p>Karena Event Handler di atas dijalankan di background, maka ketika kita menerapkan Integration test pada Use Case di atas, proses event handling belum tentu selesai dijalankan ketika test sudah selesai dieksekusi. Hal ini akan berujung pada laporan yang keliru (false-negative) pada test.</p>
+
+<p>Untuk mengatasi ini, kita dapat menggunakan driver sync ketika aplikasi dijalankan di testing environment. Hal ini mudah dilakukan di Laravel.</p>
+
+<p>Kita tinggal membuat berkas <code>app/config/testing/queue.php</code> dan menentukan konfigurasi driver queue di berkas tersebut:</p>
+
+<pre><code>&lt;?php
+return array(
+    'default' =&gt; 'sync',
+);
+</code></pre>
+
+<h2 id="kesimpulan:13d45b05e59a4a38b10f7f13a4d775d7">Kesimpulan</h2>
+
+<p>Kami sudah menjelaskan bagaimana Dicoding memanfaatkan konsep Command dan Domain Event di codebase Dicoding. Contoh-contoh yang kami perlihatkan di dua artikel ini adalah contoh fiktif. Namun, kode yang berjalan di Dicoding saat ini memiliki kemiripan dengan contoh-contoh tersebut.</p>
+
+<p>Dua konsep di atas telah membantu kami dalam mengembangkan Dicoding selama hampir 1.5 tahun perjalanannya. Kami tidak mengatakan bahwa pendekatan ini adalah yang paling sempurna. Namun minimal, alur berfikir yang kami paparkan pada dua artikel ini membantu kami dalam mengembangkan kode yang lebih mudah untuk dikelola.</p>
+
+<p>Semoga dua artikel ini ada manfaatnya. Dan bila teman-teman memiliki pendekatan yang dirasa sangat membantu teman-teman dalam menulis kode yang mudah dikelola, saya sangat berharap teman-teman mau membaginya.</p>
+
+<p>Mari kita belajar bersama.</p>
+
+                </section>
+            </article>
+            <footer id="post-meta" class="clearfix">
+                
+                        <img class="avatar" src="https://keripix.github.ioimages/avatar.png">
+                        <div>
+                            <span class="dark">A. Akbar Hidayat</span>
+                            <span></span>
+                        </div>
+                    
+                <section id="sharing">
+                    <a class="twitter" href="https://twitter.com/intent/tweet?text=https%3a%2f%2fkeripix.github.io%2fpost%2fmenerapkan_command_dan_domain_event_bagian_2%2f - Menerapkan%20Command%20dan%20Domain%20Event%20bagian%202 "><span class="icon-twitter"> Tweet</span></a>
+
+<a class="facebook" href="#" onclick="
+    window.open(
+      'https://www.facebook.com/sharer/sharer.php?u='+encodeURIComponent(location.href),
+      'facebook-share-dialog',
+      'width=626,height=436');
+    return false;"><span class="icon-facebook-rect"> Share</span>
+</a>
+
+                </section>
+            </footer>
+
+            <div id="disqus_thread"></div>
+<script type="text/javascript">
+    var disqus_shortname = 'keripixio';
+    var disqus_identifier = 'https:\/\/keripix.github.io\/post\/menerapkan_command_dan_domain_event_bagian_2\/';
+    var disqus_title = 'Menerapkan Command dan Domain Event bagian 2';
+    var disqus_url = 'https:\/\/keripix.github.io\/post\/menerapkan_command_dan_domain_event_bagian_2\/';
+
+    (function() {
+        var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+        dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+        (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    })();
+</script>
+<noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+<a href="http://disqus.com" class="dsq-brlink">comments powered by <span class="logo-disqus">Disqus</span></a>
+
+            <ul id="post-list" class="archive readmore">
+    <h3>Read more</h3>
+    
+    
+        
+        <li>
+            <a href="https://keripix.github.io/post/menerapkan_command_dan_domain_event_bagian_2/">Menerapkan Command dan Domain Event bagian 2<aside class="dates">Jan 27</aside></a>
+        </li>
+        
+   
+    
+        
+        <li>
+            <a href="https://keripix.github.io/post/menerapkan_command_dan_domain_event/">Menerapkan Command dan Domain Event<aside class="dates">Jan 27</aside></a>
+        </li>
+        
+   
+</ul>
+            <footer id="footer">
+    
+        
+<div id="social">
+    
+    <a class="symbol" href="https://www.facebook.com/keripix">
+        circlefacebook
+    </a>
+    
+    <a class="symbol" href="https://www.github.com/keripix">
+        circlegithub
+    </a>
+    
+</div>
+
+    
+    <p class="small">
+    
+        © Copyright 2016 A. Akbar Hidayat
+    
+    </p>
+</footer>
+
+        </section>
+
+        <script src="//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js"></script>
+<script src="https://keripix.github.iojs/main.js"></script>
+<script src="https://keripix.github.iojs/highlight.js"></script>
+<script>hljs.initHighlightingOnLoad();</script>
+
+
+    </body>
+</html>

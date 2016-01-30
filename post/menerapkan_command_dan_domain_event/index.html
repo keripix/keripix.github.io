@@ -1,0 +1,378 @@
+    <!DOCTYPE html>
+<html lang="en-us">
+	<head>
+		<meta charset="utf-8">
+		<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<meta name="author" content="A. Akbar Hidayat">
+		<meta name="description" content="Urip Iku Urup">
+		<meta name="generator" content="Hugo 0.16-DEV" />
+		<title>Menerapkan Command dan Domain Event &middot; Urip iku urup</title>
+		<link rel="shortcut icon" href="https://keripix.github.ioimages/favicon.ico">
+		<link rel="stylesheet" href="https://keripix.github.iocss/style.css">
+		<link rel="stylesheet" href="https://keripix.github.iocss/highlight.css">
+		<link rel="stylesheet" href="https://keripix.github.iocss/monosocialiconsfont.css">
+		
+		<link href="https://keripix.github.io/index.xml" rel="alternate" type="application/rss+xml" title="Urip iku urup" />
+		
+	</head>
+
+    <body>
+       <nav class="main-nav">
+	
+	
+		<a href='https://keripix.github.io'> <span class="arrow">←</span>Home</a>
+	
+
+	
+		<a href='https://keripix.github.ioabout'>About</a>
+	
+
+	
+	<a class="cta" href="https://keripix.github.io/index.xml">Subscribe</a>
+	
+</nav>
+
+        <section id="wrapper">
+            <article class="post">
+                <header>
+                    <h1>Menerapkan Command dan Domain Event</h1>
+                    <h2 class="headline">January 27, 2016</h2>
+                </header>
+                <section id="post-body">
+                    
+
+<p><img src="https://cdn-images-1.medium.com/max/2000/1*LIYtUrLIm1oBr1537VgYPA.jpeg" alt="Evaluasi perjalanan pengembangan Dicoding" /></p>
+
+<p>Pengembangan Dicoding sudah berjalan lebih dari setahun. Selama perjalanan ini, ada dua konsep yang sampai sekarang masih bertahan, yaitu Command dan Domain Events. Dua konsep tersebut, benar-benar telah membantu pengembangan Dicoding hingga saat ini.</p>
+
+<p>Di artikel ini, kami akan mencoba menjelaskan bagaimana Command dan Domain Events diterapkan di codebase Dicoding.</p>
+
+<h2 id="command:542aa631f4916a5f89ae5027f30c1f2f">Command</h2>
+
+<h3 id="apa-itu-command:542aa631f4916a5f89ae5027f30c1f2f">Apa itu Command</h3>
+
+<p>Command adalah sebuah perintah. Ketika ia diimplementasikan, perintah tersebut berhubungan dengan sebuah use case pada Aplikasi.</p>
+
+<p>Contoh command adalah <code>CreateUnpublishedChallenge</code>, <code>ChangeMemberPassword</code>, <code>UpdateMemberProfile</code>, dsb.</p>
+
+<p>Bila kita melihat contoh command di atas, kita kurang lebih dapat menebak dampak pasca command dijalankan (eksekusi).</p>
+
+<p>Bila command <code>CreateUnpublishedChallenge</code> dieksekusi, maka sebuah <code>Challenge</code> yang belum terpublikasikan akan terbuat.</p>
+
+<p>Penamaan command seperti contoh di atas adalah hal yang disengaja. Tidak hanya karena command-command tersebut memiliki hubungan eksplisit dengan hasil pasca ia dijalankan. Penamaan tersebu juga berhubungan erat dengan bahasa bisnis yang digunakan diluar pengembangan.</p>
+
+<p>Coba kita bandingkan dengan bahasa <code>Controller</code> yang bisa jadi menandakan proses pembuatan Challenge:</p>
+
+<pre><code>&lt;?php
+class ChallengeController
+{
+    /**
+     * POST action 
+     */
+    public function store() {
+        
+    }
+}
+
+class ChallengeController
+{
+    /**
+     * POST action 
+     */
+    public function createAction() {
+        
+    }
+}
+</code></pre>
+
+<p>Kita mungkin bisa menebak bahwa kedua fungsi di atas (<code>store</code> &amp; <code>createAction</code>), sama sama membuat sebuah resource (dalam hal ini <code>Challenge</code>). Namun, menurut kami <code>CreateUnpublishedChallenge</code> lebih tegas menandakan apa yang sedang dibuat.</p>
+
+<p>Penamaan yang secara eksplisit menandakan tanggung jawab dari sebuah class ataupun fungsi, dapat memudahkan pengelolaan kode. Karena kita butuh waktu yang lebih sedikit untuk mencari tahu apa tujuan dari kode tersebut.</p>
+
+<p>Sebuah Command juga menyimpan seluruh data yang diperlukan agar command tersebut dapat berjalan. Misalnya:</p>
+
+<pre><code>&lt;?php
+
+class CreateUnpublishedChallenge
+{
+    public function __construct($name, $summary, $description, $winningPoint, $winningQuota)
+    {
+        // constructing
+    }
+}
+</code></pre>
+
+<p>Kita dapat melihat, bahwa untuk membuat sebuah <em>Unpublished Challenge</em>, sistem membutuhkan <code>name</code>, <code>summary</code>, <code>description</code>, <code>winningPoint</code>, dan <code>winningQuota</code>.</p>
+
+<h3 id="bagaimana-command-digunakan:542aa631f4916a5f89ae5027f30c1f2f">Bagaimana Command digunakan?</h3>
+
+<p><em>Command</em> dijalankan dengan cara menyerahkannya ke <em>Command Bus</em>. <em>Command Bus</em> bertugas menemukan object mana yang akan menangani (<em>handle</em>) command di atas (Command Handler: object yang menjalankan Command).</p>
+
+<p>Di Dicoding, kami menggunakan sebuah package yang bernama <a href="https://github.com/laracasts/Commander">Commander</a> untuk menangani eksekusi Command. Dengan memanfaatkan Commander, kita dapat mengeksekusi sebuah Command dengan cara berikut:</p>
+
+<pre><code>&lt;?php
+
+class ChallengeController
+{
+    public function store()
+    {
+        try {
+            // Mengeksekusi Command
+            $this-&gt;execute(CreateUnpublishedChallenge::class);
+            
+        } catch (Exception $e) {
+            // ...
+        }
+    }
+}
+</code></pre>
+
+<p>Tentu, penanganan command tidak harus seperti cara di atas. Bila kita menggunakan <a href="http://simplebus.github.io/MessageBus/doc/command_bus.html">SimpleBus</a>, maka bentuknya adalah seperti contoh berikut</p>
+
+<pre><code>&lt;?php
+
+class ChallengeController
+{
+    public function store()
+    {
+        try {
+            $this-&gt;commandBus()-&gt;handle(new CreateUnpublishedChallenge(
+                'Nama',
+                'Ringkasan',
+                'Deskripsi',
+                1000,
+                10
+            ));
+            
+        } catch (Exception $e) {
+            // ...
+        }
+    }
+}
+</code></pre>
+
+<p>Namun, garis besarnya adalah kita tinggal mengeksekusi Command, dan Command Bus akan menemukan handlernya.</p>
+
+<h3 id="siapa-yang-mengeksekusi-command:542aa631f4916a5f89ae5027f30c1f2f">Siapa yang mengeksekusi Command</h3>
+
+<p>Pada beberapa contoh di atas, command dieksekusi oleh <code>Controller</code>. Namun sebenarnya, kita dapat mengeksekusi Command di mana saja. Misalnya, command berikut akan dijalankan oleh cron job untuk memberi kabar kepada para Admin mengenai status pending task di Dicoding:</p>
+
+<pre><code>&lt;?php
+
+use Dicoding\ApplicationService\Administration\NotifyPendingTaskCommand;
+use Illuminate\Console\Command;
+
+class DailyTaskNotifier extends Command
+{
+    // code lain disembunyikan agar contoh ini menjadi lebih ringkas
+    
+    public function fire()
+    {
+        try {
+            $commandBus = App::make('Laracasts\Commander\CommandBus');
+            
+            $commandBus-&gt;execute(new NotifyPendingTaskCommand());
+            
+        } catch (Exception $ex) {
+            Log::error($ex);
+        }
+    }
+}
+</code></pre>
+
+<h3 id="command-handler:542aa631f4916a5f89ae5027f30c1f2f">Command Handler</h3>
+
+<p>Tiap Command, memiliki satu buah Command Handler yang bertanggung jawab untuk menjalankan Command tersebut. Di Command Handler inilah kita menuliskan implementasi dari sebuah use case.</p>
+
+<pre><code>&lt;?php
+
+use Dicoding\ApplicationService\Challenges;
+
+class CreateUnpublishedChallengeHandler
+{
+    public function handle(CreateUnpublishedChallenge $command)
+    {
+        try {
+            
+            // jalankan use case       
+            
+        } catch (\Exception $e) {
+            
+        }
+    }
+}
+</code></pre>
+
+<p>Bagaimana Command Handler di atas dijalankan? Ini adalah tanggung jawab dari Command Bus. Command Bus bertanggung jawab untuk mencari tahu, Command Handler mana yang akan menjalankan sebuah Command.</p>
+
+<h3 id="keuntungan-menggunakan-command:542aa631f4916a5f89ae5027f30c1f2f">Keuntungan Menggunakan Command</h3>
+
+<p>Dari beberapa contoh di atas, kita dapat melihat bahwa logika bisnis tidak lagi berada di class yang mengeksekusi command. Ada beberapa alasan mengapa pemisahan ini memudahan kita dalam mengelola kode:</p>
+
+<h4 id="memisahkan-kode-bisnis-dengan-mekanisme-delivery:542aa631f4916a5f89ae5027f30c1f2f">Memisahkan kode bisnis dengan mekanisme delivery.</h4>
+
+<p>Yang dimaksud dengan mekanisme delivery disini adalah bagaimana aplikasi dijalankan. Contohnya adalah web framework. Mekanisme delivery memiliki bahasa yang berbeda dengan bahasa bisnis.</p>
+
+<p>Contohnya <code>ChallengeController::store</code> adalah bahasa untuk Controller ketika menangani POST Request. Sementara CreateUnpublishedChallenge adalah bahasa bisnis untuk menangani permintaan membuat sebuah Unpublished Challenge.</p>
+
+<p>Kita bisa menjalankan sebuah Command di sebuah Controller. Kita juga bisa menjalankan sebuah Command dari Command Line. Object yang menerapkan kode bisnis, tidak perlu tahu bagaimana ia dijalankan. Bagaimana kode bisnis dijalankan adalah tanggung jawab dari mekanisme delivery.</p>
+
+<h4 id="mengetahui-use-case-apa-saja-yang-sudah-diimplementasikan:542aa631f4916a5f89ae5027f30c1f2f">Mengetahui use case apa saja yang sudah diimplementasikan</h4>
+
+<p>Kita dapat mengetahui Use Case apa saja yang diterapkan oleh aplikasi kita, dengan cara melihat Command Objects. Dan menurut Uncle Bob, <a href="https://www.youtube.com/watch?v=WpkDN78P884">aplikasi kita perlu menegaskan fungsinya</a>. Dan fungsi ini dapat kita lihat di Command Objects.</p>
+
+<h4 id="memudahkan-mencari-object-yang-mengimplementasikan-sebuah-use-case:542aa631f4916a5f89ae5027f30c1f2f">Memudahkan Mencari Object Yang Mengimplementasikan Sebuah Use Case</h4>
+
+<p>Keuntungan berikutnya adalah kita dapat dengan lebih mudah mencari kode object yang mengimplementasikan pembuatan <em>Unpublished Challenge</em> (kita akan membahas soal Command Handler).</p>
+
+<p>Hal di atas lebih masuk akal misalnya, bila kita punya dua logika pembuatan Challenge yang berbeda tergantung siapa yang membuatnya. Misalnya, bila yang membuat adalah Admin, maka Challenge yang terbuat langsung dipublikasikan. Dan bila yang membuat adalah non-Admin, maka Challenge yang dibuat tidak lansung dipublikasikan.</p>
+
+<p>Untuk kasus pertama, maka kita tinggal menjalankan <code>CreatePublishedChallenge</code>. Dan untuk kasus kedua, kita menjalankan <code>CreateUnpublishedChallenge</code>. Untuk mencari tahu implementasi dari kedua use case di atas, kita tinggal membuka Command Handler untuk tiap Command.</p>
+
+<h4 id="don-t-repeat-yourself:542aa631f4916a5f89ae5027f30c1f2f">Don’t Repeat Yourself</h4>
+
+<p>Ketika kita mengimplementasi sebuah Use Case di satu tempat, kita telah menerapkan prinsip DRY (Don’t Repeat Yourself). Prinsip DRY mendorong kita untuk menuliskan implementasi dari suatu pengetahuan di satu tempat yang spesifik.</p>
+
+<p>Bila kita memiliki lebih dari satu object yang sama-sama menerapkan implementasi pembuatan Unpublished Challenge, misalnya, maka bila terjadi perbedaan antara tiap implementasi di atas, object manakah yang implementasinya lebih tepat?</p>
+
+<p>Kejadian di atas menandakan adanya ambiguitas pengetahuan. Kejadian tersebut akan menjadi lebih kentara ketika sistem bertambah besar dan kebutuhan bisnis terus berkembang.</p>
+
+<p>Situasi akan menjadi berbeda, bila kita memiliki satu otoritas yang tahu bagaimana mengimplementasikan pembuatan Unpublished Challenge. Kita tahu object mana yang memiliki pengetahuan terpercaya dalam menerapkan Use Case pembuatan Unpublished Challenge.</p>
+
+<p>Kondisi di atas memberikan kita dua keuntungan.</p>
+
+<p><strong>Yang pertama</strong>, kita dapat menggunakan implementasi sebuah Use Case di lebih dari satu tempat yang berbeda.</p>
+
+<p>Misalnya, logika registrasi member dapat digunakan lebih dari sekali, di dua skenario yang berbeda. Contohnya ketika mendaftar secara manual ataupun memanfaatkan Social Account. Dua skenario ini bisa jadi diterapkan di dua Controller yang berbeda. Namun kedua Controller ini sama-sama menjalankan <code>RegisterDeveloper</code> command.</p>
+
+<pre><code>&lt;?php
+
+class EmailMembershipController
+{
+    public function store()
+    {
+        try {
+            $this-&gt;execute(RegisterDeveloper::class);
+            
+        } catch (Exception $e) {
+            // ...
+        }
+    }
+}
+
+class FacebookMembershipController
+{
+    public function store()
+    {
+        try {
+            $this-&gt;execute(RegisterDeveloper::class);
+            
+        } catch (Exception $e) {
+            // ...
+        }
+    }
+}
+</code></pre>
+
+<p><strong>Keuntungan kedua</strong> ketika menerapkan DRY adalah bila kita perlu mengubah suatu logika tertentu, misalnya logika tentang siapa yang bisa memenangkan sebuah Challenge, kita hanya melakukan perubahan di satu tempat. Mengapa?</p>
+
+<p>Karena hanya satu tempat itulah yang memiliki pengetahuan untuk menentukan siapa yang dapat memenangkan sebuah Challenge.</p>
+
+<h2 id="domain-events:542aa631f4916a5f89ae5027f30c1f2f">Domain Events</h2>
+
+<p>Konsep kedua yang memiliki peran positif di pengembangan Dicoding adalah Domain Events. Namun pembahasan ini akan kami lakukan di artikel yang terpisah.</p>
+
+<p>Semoga artikel ini ada manfaatnya. Mohon masukan teman-teman bila ada konsep yang keliru, ada masukan mengenai penerapan yang lebih efektif, atau ada penjelasan yang kurang jelas.</p>
+
+                </section>
+            </article>
+            <footer id="post-meta" class="clearfix">
+                
+                        <img class="avatar" src="https://keripix.github.ioimages/avatar.png">
+                        <div>
+                            <span class="dark">A. Akbar Hidayat</span>
+                            <span></span>
+                        </div>
+                    
+                <section id="sharing">
+                    <a class="twitter" href="https://twitter.com/intent/tweet?text=https%3a%2f%2fkeripix.github.io%2fpost%2fmenerapkan_command_dan_domain_event%2f - Menerapkan%20Command%20dan%20Domain%20Event "><span class="icon-twitter"> Tweet</span></a>
+
+<a class="facebook" href="#" onclick="
+    window.open(
+      'https://www.facebook.com/sharer/sharer.php?u='+encodeURIComponent(location.href),
+      'facebook-share-dialog',
+      'width=626,height=436');
+    return false;"><span class="icon-facebook-rect"> Share</span>
+</a>
+
+                </section>
+            </footer>
+
+            <div id="disqus_thread"></div>
+<script type="text/javascript">
+    var disqus_shortname = 'keripixio';
+    var disqus_identifier = 'https:\/\/keripix.github.io\/post\/menerapkan_command_dan_domain_event\/';
+    var disqus_title = 'Menerapkan Command dan Domain Event';
+    var disqus_url = 'https:\/\/keripix.github.io\/post\/menerapkan_command_dan_domain_event\/';
+
+    (function() {
+        var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+        dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+        (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    })();
+</script>
+<noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+<a href="http://disqus.com" class="dsq-brlink">comments powered by <span class="logo-disqus">Disqus</span></a>
+
+            <ul id="post-list" class="archive readmore">
+    <h3>Read more</h3>
+    
+    
+        
+        <li>
+            <a href="https://keripix.github.io/post/menerapkan_command_dan_domain_event_bagian_2/">Menerapkan Command dan Domain Event bagian 2<aside class="dates">Jan 27</aside></a>
+        </li>
+        
+   
+    
+        
+        <li>
+            <a href="https://keripix.github.io/post/menerapkan_command_dan_domain_event/">Menerapkan Command dan Domain Event<aside class="dates">Jan 27</aside></a>
+        </li>
+        
+   
+</ul>
+            <footer id="footer">
+    
+        
+<div id="social">
+    
+    <a class="symbol" href="https://www.facebook.com/keripix">
+        circlefacebook
+    </a>
+    
+    <a class="symbol" href="https://www.github.com/keripix">
+        circlegithub
+    </a>
+    
+</div>
+
+    
+    <p class="small">
+    
+        © Copyright 2016 A. Akbar Hidayat
+    
+    </p>
+</footer>
+
+        </section>
+
+        <script src="//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js"></script>
+<script src="https://keripix.github.iojs/main.js"></script>
+<script src="https://keripix.github.iojs/highlight.js"></script>
+<script>hljs.initHighlightingOnLoad();</script>
+
+
+    </body>
+</html>

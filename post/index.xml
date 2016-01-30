@@ -1,0 +1,619 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Posts on Urip iku urup</title>
+    <link>https://keripix.github.io/post/</link>
+    <description>Recent content in Posts on Urip iku urup</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Wed, 27 Jan 2016 14:43:58 +0700</lastBuildDate>
+    <atom:link href="https://keripix.github.io/post/index.xml" rel="self" type="application/rss+xml" />
+    
+    <item>
+      <title>Menerapkan Command dan Domain Event bagian 2</title>
+      <link>https://keripix.github.io/post/menerapkan_command_dan_domain_event_bagian_2/</link>
+      <pubDate>Wed, 27 Jan 2016 14:43:58 +0700</pubDate>
+      
+      <guid>https://keripix.github.io/post/menerapkan_command_dan_domain_event_bagian_2/</guid>
+      <description>
+
+&lt;p&gt;&lt;img src=&#34;https://cdn-images-1.medium.com/max/2000/1*LIYtUrLIm1oBr1537VgYPA.jpeg&#34; alt=&#34;&#34; /&gt;&lt;/p&gt;
+
+&lt;p&gt;Pada pembahasan sebelumnya, kami membahas bagaimana Command diterapkan di codebase Dicoding. Pada artikel ini, kami akan mencoba untuk membahas penerapan Domain Events.&lt;/p&gt;
+
+&lt;p&gt;Namun sebelumnya, berikut adalah diagram yang menjelaskan secara sederhana hubungan antara Command, Command Bus dan Command Handler.&lt;/p&gt;
+
+&lt;p&gt;&lt;img src=&#34;https://cdn-images-1.medium.com/max/800/1*ftFc9UoA-dOPtQaEGLudzw.png&#34; alt=&#34;&#34; /&gt;&lt;/p&gt;
+
+&lt;h2 id=&#34;domain-event:13d45b05e59a4a38b10f7f13a4d775d7&#34;&gt;Domain Event&lt;/h2&gt;
+
+&lt;p&gt;Ketika logika bisnis sudah dijalankan oleh sistem, maka sebuah domain event dapat dibangkitkan. Domain Event berhubungan dengan kejadian penting dalam pelaksanaan sebuah use case.&lt;/p&gt;
+
+&lt;p&gt;Melanjutkan contoh &lt;code&gt;CreateUnpublishedChallenge&lt;/code&gt; dari artikel sebelumnya, maka ketika Unpublished Challenge ini sudah terbuat, aplikasi dapat membangkitkan event &lt;code&gt;UnpublishedChallengeWasCreated&lt;/code&gt;. Ketika sebuah domain event dibangkitkan, kita dapat menjalankan tugas-tugas tambahan yang berhubungan dengan event tadi.&lt;/p&gt;
+
+&lt;p&gt;Mari kita buat contoh sederhana untuk menggambarkan konsep di atas. Misalnya, kita memiliki use case berikut untuk proses memvalidasi sebuah Unpublished Challenge:&lt;/p&gt;
+
+&lt;ol&gt;
+&lt;li&gt;Admin meminta Unpublished Challenge untuk dipublikasikan.&lt;/li&gt;
+&lt;li&gt;Sistem memeriksa apakah Challenge sudah dibayar.&lt;/li&gt;
+&lt;li&gt;Sistem mengubah status Challenge menjadi Published.&lt;/li&gt;
+&lt;li&gt;Sistem mengabari Pemilik Challenge bahwa Challengenya sudah published.&lt;/li&gt;
+&lt;li&gt;Sistem menambahkan Challenge ke News Feeds.&lt;/li&gt;
+&lt;li&gt;Sistem mengirim tweets ke Twitter untuk mempublikasikan adanya Challenge baru.&lt;/li&gt;
+&lt;li&gt;Sistem melog kejadian di atas.&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;Ketika use case di atas diimplementasikan di sebuah Command Handler, kodenya bisa jadi seperti contoh berikut ini:&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;&amp;lt;?php
+
+class PublishUnpublishedChallengeHandler
+{
+    public function handle(PublishUnpublishedChallenge $command)
+    {
+        try {
+            
+            DB::beginTransaction();
+            
+            $publishedChallenge = $this-&amp;gt;challengePublicationContext-&amp;gt;publishUnpublishedChallenge($command-&amp;gt;challenge_id);
+            
+            $this-&amp;gt;memberMailer-&amp;gt;send($publishedChallenge-&amp;gt;getChallengeOwner(), &#39;Congrats, your Challenge Has Been Published&#39;);
+            
+            $this-&amp;gt;feedRepository-&amp;gt;add($publishedChallenge);
+            
+            $this-&amp;gt;tweetStream-&amp;gt;add(&#39;A new challenge has been published&#39;);
+            
+            $this-&amp;gt;eventLog-&amp;gt;log($publishedChallenge);
+            
+            DB::commit();
+            
+        } catch (Exception $e) {
+            
+            DB::rollback();
+            
+            throw $e;
+            
+        }
+        
+        return new PublishUnpublishedChallengeResponse($publishedChallenge);
+    }
+}
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Masalah dari contoh di atas adalah, bila ada salah satu kejadian di atas yang gagal, maka seluruh proses pembuatan Challenge akan menjadi batal. Hal ini karena seluruh tahapan di atas dijalankan di dalam sebuah database transaction.&lt;/p&gt;
+
+&lt;p&gt;Masalah kedua adalah, proses publishing di atas akan menunggu aktifitas-aktifitas yang membutuhkan waktu yang tidak sebentar. Misalnya mengirim email ke pemilik Challenge.&lt;/p&gt;
+
+&lt;h3 id=&#34;bagaimana-domain-event-dapat-membantu:13d45b05e59a4a38b10f7f13a4d775d7&#34;&gt;Bagaimana Domain Event Dapat Membantu?&lt;/h3&gt;
+
+&lt;p&gt;Yang perlu kita tentukan dari contoh use case di atas, adalah tugas mana yang utama dan tugas mana yang sekunder. Salah satu cara yang biasa saya lakukan adalah dengan menjawab pertanyaan ini:&lt;/p&gt;
+
+&lt;blockquote&gt;
+&lt;p&gt;Dapatkah saya mentolerir bila tugas tersebut gagal?&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;Bila tugas &lt;code&gt;publishUnpublishedChallenge&lt;/code&gt; gagal, dapatkah saya mentolerirnya? Tentu tidak. Ini adalah tugas utama. Bila dia gagal, seluruh proses harus gagal. Dan Admin yang mengirim request tersebut harus dikabari konteks kegagalannya.&lt;/p&gt;
+
+&lt;p&gt;Bagaimana dengan mengirim notifikasi kepada pemilik Challenge bahwa Challenge sudah terpublikasikan? Bila proses tersebut gagal, apakah kita dapat mentoleransinya? Bila saya ditanya pertanyaan ini, maka saya akan menjawab iya. Karena kejadian buruknya, kita dapat mengirim kabar ini secara manual.&lt;/p&gt;
+
+&lt;p&gt;Saya tidak berkata bahwa mengirim email ke pemilik Challenge tidak penting. Itu tetap penting. Tetapi seberapa jauh saya dapat mentoler kejadian gagal? Bila saya dapat mentolerirnya, maka ia masuk ke kategori tugas sekunder.&lt;/p&gt;
+
+&lt;p&gt;Saya juga akan memasukkan tugas menambahkan challenge ke feed, mengirim tweet ke twitter dan logging sebagai tugas sekunder.&lt;/p&gt;
+
+&lt;p&gt;Tentu saja mana yang masuk tugas utama dan tugas sekunder sangat tergantung pada kebutuhan bisnis. Bisa jadi di suatu konteks tertentu, mengirim email menjadi tugas utama. Bukan sekunder.&lt;/p&gt;
+
+&lt;p&gt;Setelah menentukan mana yang termasuk tugas utama, dan tugas sekunder, kode kita dapat berubah menjadi seperti contoh berikut ini:&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;&amp;lt;?php
+
+class PublishUnpublishedChallengeHandler
+{
+    public function handle(PublishUnpublishedChallenge $command)
+    {
+        try {
+            
+            DB::beginTransaction();
+            
+            $publishedChallenge = $this-&amp;gt;challengePublicationContext-&amp;gt;publishUnpublishedChallenge($command-&amp;gt;challenge_id);
+            
+            DB::commit();
+            
+        } catch (Exception $e) {
+            
+            DB::rollback();
+            
+            throw $e;
+            
+        }
+        
+        // Dispatch Domain Event
+        $this-&amp;gt;dispatchEventsFor($publishedChallenge);
+        
+        return new PublishUnpublishedChallengeResponse($publishedChallenge);
+    }
+}
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Pada baris ke 23 pada contoh di atas, kita dapat melihat perintah &lt;code&gt;dispatchEventsFor&lt;/code&gt;. Perintah ini akan mempublikasikan domain event yang telah dibangkitkan oleh &lt;code&gt;$publishedChallenge&lt;/code&gt;. Dimanakan event-event ini dibangkitkan?&lt;/p&gt;
+
+&lt;p&gt;Dalam contoh di atas, domain event dapat dibangkitkan ketika proses publishUnpublishedChallenge dijalankan.&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;&amp;lt;?php
+
+class ChallengePublicationContext
+{
+    public function publishUnpublishedChallenge($challengeId)
+    {
+        // Jalankan logika bisnis yang berhubungan dengan 
+        // proses mempublikasikan unpublised challenge
+        
+        // Bila sukses, maka kita tambahkan Challenge ini ke
+        // koleksi Published Challenge
+        $this-&amp;gt;publishedChallengeRepository-&amp;gt;add($challenge);
+        // Karena challenge ini sudah dipublikasikan, maka kita
+        // bangkitkan domain event yang berhubungan dengan kejadian
+        // ini
+        $challenge-&amp;gt;raise(new UnpublishedChallengeWasPublished($challenge-&amp;gt;getId()));
+        return $challenge;
+    
+    }
+}
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Tentu saja, domain event dapat dibangkitkan dimana saja selama konteks dari pembangkitan itu tepat secara logika bisnis. Misalnya pasca user baru ditambahkan ke repository, kita dapat membangkitkan event &lt;code&gt;NewDeveloperWasRegistered&lt;/code&gt;.&lt;/p&gt;
+
+&lt;h2 id=&#34;event-listener:13d45b05e59a4a38b10f7f13a4d775d7&#34;&gt;Event Listener&lt;/h2&gt;
+
+&lt;p&gt;Ketika domain event sudah dipublikasikan, maka seluruh Event Listener akan dijalankan. Dalam contoh use case kita di atas (mempublikasikan Unpublished Challenge), kita memiliki beberapa event listener sebagai berikut:&lt;/p&gt;
+
+&lt;ol&gt;
+&lt;li&gt;Listener untuk mengirimkan kabar melalui email.&lt;/li&gt;
+&lt;li&gt;Listener untuk menambahkan Challenge ke feed.&lt;/li&gt;
+&lt;li&gt;Listener untuk melakukan tweeting.&lt;/li&gt;
+&lt;li&gt;Listener untuk melakukan logging.&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;Mari kita buat contoh Event Listener untuk kasus pertama. Contoh dibawah ini menggunakan Laravel 4.2 dan Commander.&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;&amp;lt;?php
+
+class EventMailerServiceProvider extends ServiceProvider
+{
+    public function register()
+    {
+        // Ketika seluruh event dari Domain Challenge dibangkitkan, maka kita jalankan ChallengeEventMailer
+        // untuk menangani event tersebut.
+        \Event::listen(&#39;Dicoding.Domain.Challenge.*&#39;, &#39;Dicoding\Infrastructure\Emailing\Challenge\ChallengeEventMailer&#39;);
+    }
+}
+// Contoh wujud dari ChallengeEventMailer
+class ChallengeEventMailer extends EventListener
+{
+    public function whenUnpublishedChallengeWasPublished($job, $data)
+    {
+        // jalankan tugas pengiriman email
+    }
+    
+    public function whenUnpublishedChallengeWasCreated($job, $data)
+    {
+        
+    }
+    
+    // dsb
+}
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Jadi, ketika &lt;code&gt;ChallengeEventMailer&lt;/code&gt; menerima event &lt;code&gt;UnpublishedChallengeWasPublished&lt;/code&gt;, class tersebut akan menjalankan fungsi &lt;code&gt;whenUnpublishedChallengeWasPublished&lt;/code&gt;. Coba perhatikan bagaimana fungsi tersebut diberi nama sesuai dengan konteks event yang ditanganinya. Memudahkan bukan?&lt;/p&gt;
+
+&lt;p&gt;Contoh di atas juga memperlihatkan fungsi tambahan lainnya yang dimiliki oleh &lt;code&gt;ChallengeEventMailer&lt;/code&gt;. Kita dapat terus menambahkan fungsi-fungsi untuk menangani domain event yang dibangkitkan oleh object dari namespace Challenge.&lt;/p&gt;
+
+&lt;p&gt;Bagaimana dengan Event Listener lainnya? Berikut adalah contoh untuk NewsFeed:&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;&amp;lt;?php
+class NewsFeedServiceProvider extends ServiceProvider
+{
+    public function register()
+    {
+        // Ketika seluruh event dari Domain Challenge dibangkitkan, maka kita jalankan ChallengeFeedListener
+        // untuk menangani event tersebut.
+        \Event::listen(&#39;Dicoding.Domain.Challenge.*&#39;, &#39;Dicoding\Infrastructure\Feeds\Challenges\ChallengeFeedListener&#39;);
+    }
+}
+// Contoh wujud dari ChallengeFeedListener
+class ChallengeFeedListener extends EventListener
+{
+    public function whenUnpublishedChallengeWasPublished($job, $data)
+    {
+        try {
+            // tambahkan challenge ke feed
+            $challenge = $this-&amp;gt;challengeRepository-&amp;gt;findById($data);
+            $challengeFeed = new ChallengeFeed($challenge);
+            $this-&amp;gt;feedRepository-&amp;gt;add($challengeFeed);
+            $job-&amp;gt;delete();
+            
+        } catch (\Exception $e) {
+            \Log::error($e);
+            throw $e;
+        }
+        
+    }
+    
+    public function whenUnpublishedChallengeWasCreated($job, $data)
+    {
+        
+    }
+    
+    // dsb
+}
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Event Listener lainnya akan mengikuti pola Event Listener di atas. Jadi pada dasarnya, kita memiliki Event Listener yang akan mendengarkan Domain Event ketika ia dipublikasikan.&lt;/p&gt;
+
+&lt;p&gt;Bila suatu saat kita diberi tugas untuk membuat update status di facebook ketika sebuah unpublished challenge berhasil di publikasikan, kita tinggal membuat Event Listener baru.&lt;/p&gt;
+
+&lt;h3 id=&#34;menjalankan-event-listener-di-background:13d45b05e59a4a38b10f7f13a4d775d7&#34;&gt;Menjalankan Event Listener di Background&lt;/h3&gt;
+
+&lt;p&gt;Mengirim email ke pemilik challenge, dan membuat status baru di Twitter, bukanlah proses yang sebentar. Alangkah baiknya bila kita proses-proses yang memakan waktu yang lama ini dijalankan di background. Sehingga ketika proses utama sudah terlaksana, Admin mengetahui hasilnya tanpa harus menunggu tugas-tugas sekunder.&lt;/p&gt;
+
+&lt;p&gt;Bagaimana menerapkannya? Kita buat sebuah Abstract Class yang akan menjalankan event di background.&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;&amp;lt;?php
+abstract class &amp;lt;?php
+abstract class QueuedEventHandler
+{
+    // Akan dijalankan ketika event diterima
+    // Ini adalah mekanisme internal Laravel 4.2
+    public function handle($param)
+    {
+        $this-&amp;gt;handleEvent($param);
+    }
+    
+    public function handleEvent($param)
+    {
+        // Menangkap event
+        $currentEventName = Event::firing();
+        
+        // Memperoleh event name.
+        // 
+        // Metode ini tidak ditampilkan, karena sangat tergantung
+        // dari bagaimana Domain Event disimpan di struktur Aplikasi.
+        $domainEvent = $this-&amp;gt;getDomainEventName($currentEventName);
+        
+        // Mengambil namespace dari Event Listener ini.
+        // Sehingga kita dapat menjalankannya di sistem Queue
+        $currentNamespace = $this-&amp;gt;getClientClassFullNamespace();
+        
+        // Memeriksa apakah Event Listener ini memiliki fungsi untuk
+        // menangani event
+        if (method_exists($this, &amp;quot;when$domainEvent&amp;quot;)) {
+            // logging event handling
+            Log::info(&amp;quot;Event $currentEventName has been captured. And now executing when$domainEvent&amp;quot;);
+            // Menjalankan handler di background
+            // 
+            // Ini juga mekanisme internal Laravel 4.2
+            Queue::push(
+                &amp;quot;$currentNamespace@when$domainEvent&amp;quot;,
+                [
+                    $param
+                ]
+            );
+            
+        } else {
+            // ketika tidak ada event handler untuk event ini,
+            // kita log saja dalam sebuah warning.
+            Log::warning(&amp;quot;Event $currentEventName has been captured. But no when$domainEvent to handle the event&amp;quot;);
+        }
+    }
+}
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Nah, bila kita ingin menjalankan proses pengiriman email di background, kita tinggal menjadikan &lt;code&gt;ChallengeEventMailer&lt;/code&gt; meng-extend &lt;code&gt;QueuedEventHandler&lt;/code&gt; di atas.&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;&amp;lt;?php
+
+// Event handler ini akan berjalan di background
+class ChallengeEventMailer extends QueuedEventHandler
+{
+    public function whenUnpublishedChallengeWasPublished($job, $data)
+    {
+        try {
+            // Kirim email di background
+            $job-&amp;gt;delete();
+            
+        } catch (\Exception $e) {
+            \Log::error($e);
+            throw $e;
+        }
+        
+    }
+    
+    public function whenUnpublishedChallengeWasCreated($job, $data)
+    {
+        
+    }
+    
+    // dsb
+}
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;h3 id=&#34;bagaimana-dengan-testing:13d45b05e59a4a38b10f7f13a4d775d7&#34;&gt;Bagaimana Dengan Testing?&lt;/h3&gt;
+
+&lt;p&gt;Karena Event Handler di atas dijalankan di background, maka ketika kita menerapkan Integration test pada Use Case di atas, proses event handling belum tentu selesai dijalankan ketika test sudah selesai dieksekusi. Hal ini akan berujung pada laporan yang keliru (false-negative) pada test.&lt;/p&gt;
+
+&lt;p&gt;Untuk mengatasi ini, kita dapat menggunakan driver sync ketika aplikasi dijalankan di testing environment. Hal ini mudah dilakukan di Laravel.&lt;/p&gt;
+
+&lt;p&gt;Kita tinggal membuat berkas &lt;code&gt;app/config/testing/queue.php&lt;/code&gt; dan menentukan konfigurasi driver queue di berkas tersebut:&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;&amp;lt;?php
+return array(
+    &#39;default&#39; =&amp;gt; &#39;sync&#39;,
+);
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;h2 id=&#34;kesimpulan:13d45b05e59a4a38b10f7f13a4d775d7&#34;&gt;Kesimpulan&lt;/h2&gt;
+
+&lt;p&gt;Kami sudah menjelaskan bagaimana Dicoding memanfaatkan konsep Command dan Domain Event di codebase Dicoding. Contoh-contoh yang kami perlihatkan di dua artikel ini adalah contoh fiktif. Namun, kode yang berjalan di Dicoding saat ini memiliki kemiripan dengan contoh-contoh tersebut.&lt;/p&gt;
+
+&lt;p&gt;Dua konsep di atas telah membantu kami dalam mengembangkan Dicoding selama hampir 1.5 tahun perjalanannya. Kami tidak mengatakan bahwa pendekatan ini adalah yang paling sempurna. Namun minimal, alur berfikir yang kami paparkan pada dua artikel ini membantu kami dalam mengembangkan kode yang lebih mudah untuk dikelola.&lt;/p&gt;
+
+&lt;p&gt;Semoga dua artikel ini ada manfaatnya. Dan bila teman-teman memiliki pendekatan yang dirasa sangat membantu teman-teman dalam menulis kode yang mudah dikelola, saya sangat berharap teman-teman mau membaginya.&lt;/p&gt;
+
+&lt;p&gt;Mari kita belajar bersama.&lt;/p&gt;
+</description>
+    </item>
+    
+    <item>
+      <title>Menerapkan Command dan Domain Event</title>
+      <link>https://keripix.github.io/post/menerapkan_command_dan_domain_event/</link>
+      <pubDate>Wed, 27 Jan 2016 14:43:52 +0700</pubDate>
+      
+      <guid>https://keripix.github.io/post/menerapkan_command_dan_domain_event/</guid>
+      <description>
+
+&lt;p&gt;&lt;img src=&#34;https://cdn-images-1.medium.com/max/2000/1*LIYtUrLIm1oBr1537VgYPA.jpeg&#34; alt=&#34;Evaluasi perjalanan pengembangan Dicoding&#34; /&gt;&lt;/p&gt;
+
+&lt;p&gt;Pengembangan Dicoding sudah berjalan lebih dari setahun. Selama perjalanan ini, ada dua konsep yang sampai sekarang masih bertahan, yaitu Command dan Domain Events. Dua konsep tersebut, benar-benar telah membantu pengembangan Dicoding hingga saat ini.&lt;/p&gt;
+
+&lt;p&gt;Di artikel ini, kami akan mencoba menjelaskan bagaimana Command dan Domain Events diterapkan di codebase Dicoding.&lt;/p&gt;
+
+&lt;h2 id=&#34;command:542aa631f4916a5f89ae5027f30c1f2f&#34;&gt;Command&lt;/h2&gt;
+
+&lt;h3 id=&#34;apa-itu-command:542aa631f4916a5f89ae5027f30c1f2f&#34;&gt;Apa itu Command&lt;/h3&gt;
+
+&lt;p&gt;Command adalah sebuah perintah. Ketika ia diimplementasikan, perintah tersebut berhubungan dengan sebuah use case pada Aplikasi.&lt;/p&gt;
+
+&lt;p&gt;Contoh command adalah &lt;code&gt;CreateUnpublishedChallenge&lt;/code&gt;, &lt;code&gt;ChangeMemberPassword&lt;/code&gt;, &lt;code&gt;UpdateMemberProfile&lt;/code&gt;, dsb.&lt;/p&gt;
+
+&lt;p&gt;Bila kita melihat contoh command di atas, kita kurang lebih dapat menebak dampak pasca command dijalankan (eksekusi).&lt;/p&gt;
+
+&lt;p&gt;Bila command &lt;code&gt;CreateUnpublishedChallenge&lt;/code&gt; dieksekusi, maka sebuah &lt;code&gt;Challenge&lt;/code&gt; yang belum terpublikasikan akan terbuat.&lt;/p&gt;
+
+&lt;p&gt;Penamaan command seperti contoh di atas adalah hal yang disengaja. Tidak hanya karena command-command tersebut memiliki hubungan eksplisit dengan hasil pasca ia dijalankan. Penamaan tersebu juga berhubungan erat dengan bahasa bisnis yang digunakan diluar pengembangan.&lt;/p&gt;
+
+&lt;p&gt;Coba kita bandingkan dengan bahasa &lt;code&gt;Controller&lt;/code&gt; yang bisa jadi menandakan proses pembuatan Challenge:&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;&amp;lt;?php
+class ChallengeController
+{
+    /**
+     * POST action 
+     */
+    public function store() {
+        
+    }
+}
+
+class ChallengeController
+{
+    /**
+     * POST action 
+     */
+    public function createAction() {
+        
+    }
+}
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Kita mungkin bisa menebak bahwa kedua fungsi di atas (&lt;code&gt;store&lt;/code&gt; &amp;amp; &lt;code&gt;createAction&lt;/code&gt;), sama sama membuat sebuah resource (dalam hal ini &lt;code&gt;Challenge&lt;/code&gt;). Namun, menurut kami &lt;code&gt;CreateUnpublishedChallenge&lt;/code&gt; lebih tegas menandakan apa yang sedang dibuat.&lt;/p&gt;
+
+&lt;p&gt;Penamaan yang secara eksplisit menandakan tanggung jawab dari sebuah class ataupun fungsi, dapat memudahkan pengelolaan kode. Karena kita butuh waktu yang lebih sedikit untuk mencari tahu apa tujuan dari kode tersebut.&lt;/p&gt;
+
+&lt;p&gt;Sebuah Command juga menyimpan seluruh data yang diperlukan agar command tersebut dapat berjalan. Misalnya:&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;&amp;lt;?php
+
+class CreateUnpublishedChallenge
+{
+    public function __construct($name, $summary, $description, $winningPoint, $winningQuota)
+    {
+        // constructing
+    }
+}
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Kita dapat melihat, bahwa untuk membuat sebuah &lt;em&gt;Unpublished Challenge&lt;/em&gt;, sistem membutuhkan &lt;code&gt;name&lt;/code&gt;, &lt;code&gt;summary&lt;/code&gt;, &lt;code&gt;description&lt;/code&gt;, &lt;code&gt;winningPoint&lt;/code&gt;, dan &lt;code&gt;winningQuota&lt;/code&gt;.&lt;/p&gt;
+
+&lt;h3 id=&#34;bagaimana-command-digunakan:542aa631f4916a5f89ae5027f30c1f2f&#34;&gt;Bagaimana Command digunakan?&lt;/h3&gt;
+
+&lt;p&gt;&lt;em&gt;Command&lt;/em&gt; dijalankan dengan cara menyerahkannya ke &lt;em&gt;Command Bus&lt;/em&gt;. &lt;em&gt;Command Bus&lt;/em&gt; bertugas menemukan object mana yang akan menangani (&lt;em&gt;handle&lt;/em&gt;) command di atas (Command Handler: object yang menjalankan Command).&lt;/p&gt;
+
+&lt;p&gt;Di Dicoding, kami menggunakan sebuah package yang bernama &lt;a href=&#34;https://github.com/laracasts/Commander&#34;&gt;Commander&lt;/a&gt; untuk menangani eksekusi Command. Dengan memanfaatkan Commander, kita dapat mengeksekusi sebuah Command dengan cara berikut:&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;&amp;lt;?php
+
+class ChallengeController
+{
+    public function store()
+    {
+        try {
+            // Mengeksekusi Command
+            $this-&amp;gt;execute(CreateUnpublishedChallenge::class);
+            
+        } catch (Exception $e) {
+            // ...
+        }
+    }
+}
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Tentu, penanganan command tidak harus seperti cara di atas. Bila kita menggunakan &lt;a href=&#34;http://simplebus.github.io/MessageBus/doc/command_bus.html&#34;&gt;SimpleBus&lt;/a&gt;, maka bentuknya adalah seperti contoh berikut&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;&amp;lt;?php
+
+class ChallengeController
+{
+    public function store()
+    {
+        try {
+            $this-&amp;gt;commandBus()-&amp;gt;handle(new CreateUnpublishedChallenge(
+                &#39;Nama&#39;,
+                &#39;Ringkasan&#39;,
+                &#39;Deskripsi&#39;,
+                1000,
+                10
+            ));
+            
+        } catch (Exception $e) {
+            // ...
+        }
+    }
+}
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Namun, garis besarnya adalah kita tinggal mengeksekusi Command, dan Command Bus akan menemukan handlernya.&lt;/p&gt;
+
+&lt;h3 id=&#34;siapa-yang-mengeksekusi-command:542aa631f4916a5f89ae5027f30c1f2f&#34;&gt;Siapa yang mengeksekusi Command&lt;/h3&gt;
+
+&lt;p&gt;Pada beberapa contoh di atas, command dieksekusi oleh &lt;code&gt;Controller&lt;/code&gt;. Namun sebenarnya, kita dapat mengeksekusi Command di mana saja. Misalnya, command berikut akan dijalankan oleh cron job untuk memberi kabar kepada para Admin mengenai status pending task di Dicoding:&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;&amp;lt;?php
+
+use Dicoding\ApplicationService\Administration\NotifyPendingTaskCommand;
+use Illuminate\Console\Command;
+
+class DailyTaskNotifier extends Command
+{
+    // code lain disembunyikan agar contoh ini menjadi lebih ringkas
+    
+    public function fire()
+    {
+        try {
+            $commandBus = App::make(&#39;Laracasts\Commander\CommandBus&#39;);
+            
+            $commandBus-&amp;gt;execute(new NotifyPendingTaskCommand());
+            
+        } catch (Exception $ex) {
+            Log::error($ex);
+        }
+    }
+}
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;h3 id=&#34;command-handler:542aa631f4916a5f89ae5027f30c1f2f&#34;&gt;Command Handler&lt;/h3&gt;
+
+&lt;p&gt;Tiap Command, memiliki satu buah Command Handler yang bertanggung jawab untuk menjalankan Command tersebut. Di Command Handler inilah kita menuliskan implementasi dari sebuah use case.&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;&amp;lt;?php
+
+use Dicoding\ApplicationService\Challenges;
+
+class CreateUnpublishedChallengeHandler
+{
+    public function handle(CreateUnpublishedChallenge $command)
+    {
+        try {
+            
+            // jalankan use case       
+            
+        } catch (\Exception $e) {
+            
+        }
+    }
+}
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Bagaimana Command Handler di atas dijalankan? Ini adalah tanggung jawab dari Command Bus. Command Bus bertanggung jawab untuk mencari tahu, Command Handler mana yang akan menjalankan sebuah Command.&lt;/p&gt;
+
+&lt;h3 id=&#34;keuntungan-menggunakan-command:542aa631f4916a5f89ae5027f30c1f2f&#34;&gt;Keuntungan Menggunakan Command&lt;/h3&gt;
+
+&lt;p&gt;Dari beberapa contoh di atas, kita dapat melihat bahwa logika bisnis tidak lagi berada di class yang mengeksekusi command. Ada beberapa alasan mengapa pemisahan ini memudahan kita dalam mengelola kode:&lt;/p&gt;
+
+&lt;h4 id=&#34;memisahkan-kode-bisnis-dengan-mekanisme-delivery:542aa631f4916a5f89ae5027f30c1f2f&#34;&gt;Memisahkan kode bisnis dengan mekanisme delivery.&lt;/h4&gt;
+
+&lt;p&gt;Yang dimaksud dengan mekanisme delivery disini adalah bagaimana aplikasi dijalankan. Contohnya adalah web framework. Mekanisme delivery memiliki bahasa yang berbeda dengan bahasa bisnis.&lt;/p&gt;
+
+&lt;p&gt;Contohnya &lt;code&gt;ChallengeController::store&lt;/code&gt; adalah bahasa untuk Controller ketika menangani POST Request. Sementara CreateUnpublishedChallenge adalah bahasa bisnis untuk menangani permintaan membuat sebuah Unpublished Challenge.&lt;/p&gt;
+
+&lt;p&gt;Kita bisa menjalankan sebuah Command di sebuah Controller. Kita juga bisa menjalankan sebuah Command dari Command Line. Object yang menerapkan kode bisnis, tidak perlu tahu bagaimana ia dijalankan. Bagaimana kode bisnis dijalankan adalah tanggung jawab dari mekanisme delivery.&lt;/p&gt;
+
+&lt;h4 id=&#34;mengetahui-use-case-apa-saja-yang-sudah-diimplementasikan:542aa631f4916a5f89ae5027f30c1f2f&#34;&gt;Mengetahui use case apa saja yang sudah diimplementasikan&lt;/h4&gt;
+
+&lt;p&gt;Kita dapat mengetahui Use Case apa saja yang diterapkan oleh aplikasi kita, dengan cara melihat Command Objects. Dan menurut Uncle Bob, &lt;a href=&#34;https://www.youtube.com/watch?v=WpkDN78P884&#34;&gt;aplikasi kita perlu menegaskan fungsinya&lt;/a&gt;. Dan fungsi ini dapat kita lihat di Command Objects.&lt;/p&gt;
+
+&lt;h4 id=&#34;memudahkan-mencari-object-yang-mengimplementasikan-sebuah-use-case:542aa631f4916a5f89ae5027f30c1f2f&#34;&gt;Memudahkan Mencari Object Yang Mengimplementasikan Sebuah Use Case&lt;/h4&gt;
+
+&lt;p&gt;Keuntungan berikutnya adalah kita dapat dengan lebih mudah mencari kode object yang mengimplementasikan pembuatan &lt;em&gt;Unpublished Challenge&lt;/em&gt; (kita akan membahas soal Command Handler).&lt;/p&gt;
+
+&lt;p&gt;Hal di atas lebih masuk akal misalnya, bila kita punya dua logika pembuatan Challenge yang berbeda tergantung siapa yang membuatnya. Misalnya, bila yang membuat adalah Admin, maka Challenge yang terbuat langsung dipublikasikan. Dan bila yang membuat adalah non-Admin, maka Challenge yang dibuat tidak lansung dipublikasikan.&lt;/p&gt;
+
+&lt;p&gt;Untuk kasus pertama, maka kita tinggal menjalankan &lt;code&gt;CreatePublishedChallenge&lt;/code&gt;. Dan untuk kasus kedua, kita menjalankan &lt;code&gt;CreateUnpublishedChallenge&lt;/code&gt;. Untuk mencari tahu implementasi dari kedua use case di atas, kita tinggal membuka Command Handler untuk tiap Command.&lt;/p&gt;
+
+&lt;h4 id=&#34;don-t-repeat-yourself:542aa631f4916a5f89ae5027f30c1f2f&#34;&gt;Don’t Repeat Yourself&lt;/h4&gt;
+
+&lt;p&gt;Ketika kita mengimplementasi sebuah Use Case di satu tempat, kita telah menerapkan prinsip DRY (Don’t Repeat Yourself). Prinsip DRY mendorong kita untuk menuliskan implementasi dari suatu pengetahuan di satu tempat yang spesifik.&lt;/p&gt;
+
+&lt;p&gt;Bila kita memiliki lebih dari satu object yang sama-sama menerapkan implementasi pembuatan Unpublished Challenge, misalnya, maka bila terjadi perbedaan antara tiap implementasi di atas, object manakah yang implementasinya lebih tepat?&lt;/p&gt;
+
+&lt;p&gt;Kejadian di atas menandakan adanya ambiguitas pengetahuan. Kejadian tersebut akan menjadi lebih kentara ketika sistem bertambah besar dan kebutuhan bisnis terus berkembang.&lt;/p&gt;
+
+&lt;p&gt;Situasi akan menjadi berbeda, bila kita memiliki satu otoritas yang tahu bagaimana mengimplementasikan pembuatan Unpublished Challenge. Kita tahu object mana yang memiliki pengetahuan terpercaya dalam menerapkan Use Case pembuatan Unpublished Challenge.&lt;/p&gt;
+
+&lt;p&gt;Kondisi di atas memberikan kita dua keuntungan.&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;Yang pertama&lt;/strong&gt;, kita dapat menggunakan implementasi sebuah Use Case di lebih dari satu tempat yang berbeda.&lt;/p&gt;
+
+&lt;p&gt;Misalnya, logika registrasi member dapat digunakan lebih dari sekali, di dua skenario yang berbeda. Contohnya ketika mendaftar secara manual ataupun memanfaatkan Social Account. Dua skenario ini bisa jadi diterapkan di dua Controller yang berbeda. Namun kedua Controller ini sama-sama menjalankan &lt;code&gt;RegisterDeveloper&lt;/code&gt; command.&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;&amp;lt;?php
+
+class EmailMembershipController
+{
+    public function store()
+    {
+        try {
+            $this-&amp;gt;execute(RegisterDeveloper::class);
+            
+        } catch (Exception $e) {
+            // ...
+        }
+    }
+}
+
+class FacebookMembershipController
+{
+    public function store()
+    {
+        try {
+            $this-&amp;gt;execute(RegisterDeveloper::class);
+            
+        } catch (Exception $e) {
+            // ...
+        }
+    }
+}
+&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;&lt;strong&gt;Keuntungan kedua&lt;/strong&gt; ketika menerapkan DRY adalah bila kita perlu mengubah suatu logika tertentu, misalnya logika tentang siapa yang bisa memenangkan sebuah Challenge, kita hanya melakukan perubahan di satu tempat. Mengapa?&lt;/p&gt;
+
+&lt;p&gt;Karena hanya satu tempat itulah yang memiliki pengetahuan untuk menentukan siapa yang dapat memenangkan sebuah Challenge.&lt;/p&gt;
+
+&lt;h2 id=&#34;domain-events:542aa631f4916a5f89ae5027f30c1f2f&#34;&gt;Domain Events&lt;/h2&gt;
+
+&lt;p&gt;Konsep kedua yang memiliki peran positif di pengembangan Dicoding adalah Domain Events. Namun pembahasan ini akan kami lakukan di artikel yang terpisah.&lt;/p&gt;
+
+&lt;p&gt;Semoga artikel ini ada manfaatnya. Mohon masukan teman-teman bila ada konsep yang keliru, ada masukan mengenai penerapan yang lebih efektif, atau ada penjelasan yang kurang jelas.&lt;/p&gt;
+</description>
+    </item>
+    
+  </channel>
+</rss>
