@@ -6,8 +6,30 @@
     <description>Recent content in Posts on Urip iku urup</description>
     <generator>Hugo -- gohugo.io</generator>
     <language>en-us</language>
-    <lastBuildDate>Wed, 27 Jan 2016 14:43:58 +0700</lastBuildDate>
+    <lastBuildDate>Fri, 11 Mar 2016 11:29:57 +0700</lastBuildDate>
     <atom:link href="https://keripix.github.io/post/index.xml" rel="self" type="application/rss+xml" />
+    
+    <item>
+      <title>Meng-komponenkan Javascript</title>
+      <link>https://keripix.github.io/post/mengkomponenkan-javascript/</link>
+      <pubDate>Fri, 11 Mar 2016 11:29:57 +0700</pubDate>
+      
+      <guid>https://keripix.github.io/post/mengkomponenkan-javascript/</guid>
+      <description>&lt;p&gt;Untuk mengetahui bagaimana Javascript dikomponenkan di Dicoding, Anda dapat membaca &lt;a href=&#34;https://medium.com/@keripix/bundle-terpisah-untuk-tiap-javascript-module-a59ae4e6306f#.ow2c1db56&#34;&gt;artikel kami di Medium ini.&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Ada beberapa catatan bagaimana konsep di atas berkembang hingga saat ini.&lt;/p&gt;
+
+&lt;ol&gt;
+&lt;li&gt;Saat ini Dicoding sudah memanfaatkan beberapa fitur ES2016. Terutama fitur module. Kami menggunakan BabelJS untuk mendukung ini.&lt;/li&gt;
+&lt;li&gt;Kami membatalkan niat untuk menggunakan VueJS. Keputusan ini bukan karena kami menganggap VueJS buruk. Namun keputusan ini diambil karena alasan kondisi tim kami: tim yang super kecil (1 engineer). Kami juga ingin lebih memberdayakan pendekatan Progressive Enhancement.&lt;/li&gt;
+&lt;li&gt;Dicoding juga sudah menerapkan SASS untuk urusan CSS.&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;Kami berharap dapat menuliskan 3 perkembangan di atas di artikelnya masing-masing.&lt;/p&gt;
+
+&lt;p&gt;Selamat ngoding.&lt;/p&gt;
+</description>
+    </item>
     
     <item>
       <title>Menerapkan Command dan Domain Event bagian 2</title>
